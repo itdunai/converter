@@ -1,36 +1,86 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Image Compressor & Converter
 
-## Getting Started
+Web app for:
+- JPG/PNG compression
+- PNG -> JPG conversion
+- JPG -> WebP conversion
+- PNG -> WebP conversion
 
-First, run the development server:
+## Features
+
+- Multi-file upload (limit is configurable via env)
+- Adjustable quality, PNG compression, resize options
+- Queue-based async processing with per-file progress
+- Single-file download and ZIP download for completed jobs
+- Health endpoint for deployment checks
+
+## Tech stack
+
+- Next.js (App Router)
+- Sharp for image processing
+- In-memory queue for jobs
+
+## Local run
 
 ```bash
+npm install
+cp .env.example .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `npm run dev` - development mode
+- `npm run build` - production build
+- `npm run start` - run production build
+- `npm run lint` - ESLint
+- `npm run test` - Vitest tests
 
-## Learn More
+## API endpoints
 
-To learn more about Next.js, take a look at the following resources:
+- `POST /api/images/process` - enqueue one file for processing
+- `GET /api/jobs/:id` - get job status/progress
+- `GET /api/jobs/:id/download` - download processed file
+- `POST /api/jobs/download-zip` - download zip archive by `jobIds`
+- `GET /api/health` - healthcheck
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deployment notes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Requires Node.js runtime (not static hosting).
+- `MAX_PARALLEL_JOBS` controls server-side processing concurrency.
+- `MAX_FILES_PER_BATCH` controls server-side batch validation limit.
+- `NEXT_PUBLIC_MAX_FILES_PER_BATCH` controls UI upload cap shown in browser.
+- For horizontal scaling, move queue state from memory to shared storage/queue.
 
-## Deploy on Vercel
+## Beget deployment (example)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Create a Node.js site in Beget panel and choose Node 20+.
+2. Upload project files (Git deploy or archive upload) to the app directory.
+3. In Beget shell, install dependencies and build:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm ci
+npm run build
+```
+
+4. Set start command in Beget app settings:
+
+```bash
+npm run start
+```
+
+5. Configure environment variables in Beget:
+   - `MAX_PARALLEL_JOBS=3`
+   - `MAX_FILES_PER_BATCH=20`
+   - `NEXT_PUBLIC_MAX_FILES_PER_BATCH=20`
+   - `PORT` (if Beget requires a specific internal port)
+6. Ensure domain is linked to the Node.js app (reverse proxy to app process in Beget panel).
+7. Start/restart the app and check:
+   - main page: `https://your-domain`
+   - healthcheck: `https://your-domain/api/health`
+
+If static files or "Index of" appears, the domain is pointing to static hosting instead of the Node.js app process.
+
+Подробная инструкция на русском: `DEPLOY_BEGET.md`.

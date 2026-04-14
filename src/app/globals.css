@@ -22,5 +22,58 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes softPulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes shine {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(180%);
+  }
+}
+
+.anim-fade-up {
+  animation: fadeUp 0.45s ease-out both;
+}
+
+.anim-soft-pulse {
+  animation: softPulse 1.6s ease-in-out infinite;
+}
+
+.anim-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.anim-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 36%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  animation: shine 2.4s ease-in-out infinite;
+  pointer-events: none;
 }
