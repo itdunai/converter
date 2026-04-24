@@ -36,8 +36,15 @@ const defaultSettings: ProcessSettings = {
   pngCompressionLevel: 9,
 };
 
+const APP_TITLE = process.env.NEXT_PUBLIC_APP_TITLE ?? "Сжатие и конвертация изображений";
+const APP_DESCRIPTION =
+  process.env.NEXT_PUBLIC_APP_DESCRIPTION ??
+  "Инструмент для сжатия и конвертации изображений";
 const parsedClientMaxFiles = Number(process.env.NEXT_PUBLIC_MAX_FILES_PER_BATCH ?? 20);
 const MAX_FILES_PER_BATCH = Number.isInteger(parsedClientMaxFiles) && parsedClientMaxFiles > 0 ? parsedClientMaxFiles : 20;
+const parsedClientMaxFileSizeMb = Number(process.env.NEXT_PUBLIC_MAX_FILE_SIZE_MB ?? 10);
+const MAX_FILE_SIZE_MB = Number.isFinite(parsedClientMaxFileSizeMb) && parsedClientMaxFileSizeMb > 0 ? parsedClientMaxFileSizeMb : 10;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 function createLocalId(): string {
   if (typeof globalThis !== "undefined" && globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -205,8 +212,13 @@ export default function Home() {
       setGlobalError("Часть файлов пропущена. Поддерживаются только JPG и PNG.");
     }
 
+    const bySize = filtered.filter((file) => file.size <= MAX_FILE_SIZE_BYTES);
+    if (bySize.length !== filtered.length) {
+      setGlobalError(`Часть файлов пропущена: превышен лимит ${MAX_FILE_SIZE_MB} МБ.`);
+    }
+
     const prepared = await Promise.all(
-      filtered.map((file) =>
+      bySize.map((file) =>
         attachDimensions({
           localId: createLocalId(),
           file,
@@ -343,7 +355,7 @@ export default function Home() {
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-6">
         <section className={cardClass}>
           <div className="mb-3 flex items-start justify-between gap-3">
-            <h1 className={isDark ? "text-3xl font-bold tracking-tight text-slate-100" : "text-3xl font-bold tracking-tight text-slate-900"}>Сжатие и конвертация изображений</h1>
+            <h1 className={isDark ? "text-3xl font-bold tracking-tight text-slate-100" : "text-3xl font-bold tracking-tight text-slate-900"}>{APP_TITLE}</h1>
             <button
               type="button"
               className={isDark ? "cursor-pointer rounded-xl border border-slate-700 p-2 text-slate-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-500 hover:bg-slate-800" : "cursor-pointer rounded-xl border border-slate-300 p-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-500 hover:bg-slate-50"}
@@ -363,9 +375,7 @@ export default function Home() {
               )}
             </button>
           </div>
-          <p className={isDark ? "mt-2 text-sm text-slate-300" : "mt-2 text-sm text-slate-600"}>
-            Приложение работает полностью в браузере: без SSR и без серверной обработки файлов.
-          </p>
+          <p className={isDark ? "mt-2 text-sm text-slate-300" : "mt-2 text-sm text-slate-600"}>{APP_DESCRIPTION}</p>
           <div className="mt-4 flex gap-2">
             <button
               type="button"
@@ -407,7 +417,7 @@ export default function Home() {
               </span>
               <input type="file" accept=".jpg,.jpeg,.png" className="hidden" multiple onChange={handleInputChange} />
             </label>
-            <p className={`text-xs ${textMuted}`}>Ограничение: максимум {MAX_FILES_PER_BATCH} файлов, до 10 МБ каждый</p>
+            <p className={`text-xs ${textMuted}`}>Ограничение: максимум {MAX_FILES_PER_BATCH} файлов, до {MAX_FILE_SIZE_MB} МБ каждый</p>
           </div>
 
           <div className="mt-6 space-y-4 md:mt-0">
