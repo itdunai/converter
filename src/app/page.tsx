@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import JSZip from "jszip";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 type UiStatus = "idle" | "pending" | "processing" | "completed" | "failed";
@@ -14,10 +15,11 @@ type UploadedFile = {
   dimensions?: { width: number; height: number };
   status: UiStatus;
   progress: number;
-  jobId?: string;
   error?: string;
   outputSize?: number;
   outputFileName?: string;
+  outputBlob?: Blob;
+  outputUrl?: string;
 };
 
 type ProcessSettings = {
@@ -63,19 +65,104 @@ function statusTone(status: UiStatus, isDark: boolean): string {
   return isDark ? "text-slate-300 bg-slate-800 border-slate-700" : "text-slate-600 bg-slate-100 border-slate-200";
 }
 
+function getOutputFormat(file: File, mode: Mode, selected: OutputFormat): OutputFormat {
+  if (mode === "convert") {
+    return selected;
+  }
+  return file.type === "image/png" ? "png" : "jpg";
+}
+
+function getMimeType(format: OutputFormat): string {
+  if (format === "jpg") return "image/jpeg";
+  if (format === "png") return "image/png";
+  return "image/webp";
+}
+
+function replaceExtension(fileName: string, extension: string): string {
+  const base = fileName.replace(/\.[^/.]+$/, "");
+  return `${base}.${extension}`;
+}
+
+async function loadImage(file: File): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new window.Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("Не удалось загрузить изображение."));
+      img.src = url;
+    });
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function processInBrowser(file: File, mode: Mode, settings: ProcessSettings): Promise<{ blob: Blob; fileName: string }> {
+  const outputFormat = getOutputFormat(file, mode, settings.outputFormat);
+  const outputMime = getMimeType(outputFormat);
+
+  const image = await loadImage(file);
+  let targetWidth = image.naturalWidth;
+  let targetHeight = image.naturalHeight;
+
+  if (mode === "compress" && (settings.maxWidth || settings.maxHeight)) {
+    const maxW = settings.maxWidth ?? image.naturalWidth;
+    const maxH = settings.maxHeight ?? image.naturalHeight;
+    const ratio = Math.min(maxW / image.naturalWidth, maxH / image.naturalHeight, 1);
+    targetWidth = Math.max(1, Math.round(image.naturalWidth * ratio));
+    targetHeight = Math.max(1, Math.round(image.naturalHeight * ratio));
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Не удалось создать canvas-контекст.");
+  }
+
+  if (outputFormat === "jpg") {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  context.drawImage(image, 0, 0, targetWidth, targetHeight);
+  const quality = outputFormat === "png" ? undefined : settings.quality / 100;
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (createdBlob) => {
+        if (!createdBlob) {
+          reject(new Error("Не удалось создать выходной файл."));
+          return;
+        }
+        resolve(createdBlob);
+      },
+      outputMime,
+      quality,
+    );
+  });
+
+  return {
+    blob,
+    fileName: replaceExtension(file.name, outputFormat),
+  };
+}
+
 export default function Home() {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [settings, setSettings] = useState<ProcessSettings>(defaultSettings);
   const [mode, setMode] = useState<Mode>("convert");
   const [globalError, setGlobalError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isDark, setIsDark] = useState(false);
-
-  useEffect(() => {
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === "undefined") return false;
     const saved = window.localStorage.getItem("theme");
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    setIsDark(saved ? saved === "dark" : prefersDark);
-  }, []);
+    return saved ? saved === "dark" : prefersDark;
+  });
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -84,66 +171,18 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
-      for (const file of files) URL.revokeObjectURL(file.previewUrl);
+      for (const item of files) {
+        URL.revokeObjectURL(item.previewUrl);
+        if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
+      }
     };
   }, [files]);
 
-  useEffect(() => {
-    const activeJobs = files.filter((f) => f.jobId && (f.status === "pending" || f.status === "processing"));
-    if (activeJobs.length === 0) return;
-
-    const timer = setInterval(async () => {
-      for (const file of activeJobs) {
-        if (!file.jobId) continue;
-        try {
-          const response = await fetch(`/api/jobs/${file.jobId}`);
-          const data = (await response.json()) as {
-            status?: UiStatus;
-            progress?: number;
-            error?: string;
-            outputSize?: number;
-            outputFileName?: string;
-          };
-
-          if (!response.ok || !data.status) continue;
-          const nextStatus: UiStatus = data.status;
-          setFiles((prev) =>
-            prev.map((entry) =>
-              entry.localId === file.localId
-                ? {
-                    ...entry,
-                    status: nextStatus,
-                    progress: data.progress ?? entry.progress,
-                    error: data.error,
-                    outputSize: data.outputSize,
-                    outputFileName: data.outputFileName,
-                  }
-                : entry,
-            ),
-          );
-        } catch {
-          setFiles((prev) =>
-            prev.map((entry) =>
-              entry.localId === file.localId
-                ? { ...entry, status: "failed", progress: 100, error: "Не удалось получить статус обработки." }
-                : entry,
-            ),
-          );
-        }
-      }
-    }, 1500);
-
-    return () => clearInterval(timer);
-  }, [files]);
-
-  const completedJobIds = useMemo(
-    () => files.filter((file) => file.status === "completed" && file.jobId).map((file) => file.jobId as string),
-    [files],
-  );
+  const completedEntries = useMemo(() => files.filter((file) => file.status === "completed" && file.outputBlob && file.outputFileName), [files]);
   const hasFiles = files.length > 0;
   const hasActiveProcessing = files.some((file) => file.status === "pending" || file.status === "processing");
   const hasRunFinished = hasFiles && !hasActiveProcessing && files.some((file) => file.status !== "idle");
-  const canDownloadZip = hasRunFinished && completedJobIds.length > 0;
+  const canDownloadZip = hasRunFinished && completedEntries.length > 0;
   const skeletonCount = isSubmitting ? Math.min(Math.max(files.length, 2), 6) : 0;
 
   async function attachDimensions(entry: UploadedFile): Promise<UploadedFile> {
@@ -159,6 +198,7 @@ export default function Home() {
   async function handleFiles(selected: FileList | null): Promise<void> {
     if (!selected) return;
     setGlobalError("");
+
     const incoming = Array.from(selected);
     const filtered = incoming.filter((file) => ["image/jpeg", "image/jpg", "image/png"].includes(file.type));
     if (filtered.length !== incoming.length) {
@@ -198,80 +238,74 @@ export default function Home() {
       if (fileEntry.status === "completed") continue;
 
       setFiles((prev) =>
-        prev.map((entry) => (entry.localId === fileEntry.localId ? { ...entry, status: "pending", progress: 5, error: undefined } : entry)),
-      );
-
-      const payload = new FormData();
-      payload.set("file", fileEntry.file);
-      payload.set(
-        "options",
-        JSON.stringify({
-          outputFormat: mode === "compress" ? (fileEntry.file.type === "image/png" ? "png" : "jpg") : settings.outputFormat,
-          quality: settings.quality,
-          pngCompressionLevel: settings.pngCompressionLevel,
-          resize: { maxWidth: settings.maxWidth, maxHeight: settings.maxHeight },
-          backgroundColor: "#ffffff",
-        }),
+        prev.map((entry) =>
+          entry.localId === fileEntry.localId
+            ? { ...entry, status: "pending", progress: 5, error: undefined }
+            : entry,
+        ),
       );
 
       try {
-        const response = await fetch("/api/images/process", { method: "POST", body: payload });
-        const data = (await response.json()) as { error?: string; jobId?: string; progress?: number; status?: UiStatus };
-        if (!response.ok || !data.jobId || !data.status) {
-          throw new Error(data.error || "Не удалось добавить файл в очередь.");
-        }
-        const queuedStatus: UiStatus = data.status;
         setFiles((prev) =>
           prev.map((entry) =>
-            entry.localId === fileEntry.localId
-              ? { ...entry, jobId: data.jobId, status: queuedStatus, progress: data.progress ?? 10 }
-              : entry,
+            entry.localId === fileEntry.localId ? { ...entry, status: "processing", progress: 35 } : entry,
           ),
+        );
+
+        const result = await processInBrowser(fileEntry.file, mode, settings);
+        const outputUrl = URL.createObjectURL(result.blob);
+
+        setFiles((prev) =>
+          prev.map((entry) => {
+            if (entry.localId !== fileEntry.localId) return entry;
+            if (entry.outputUrl) URL.revokeObjectURL(entry.outputUrl);
+            return {
+              ...entry,
+              status: "completed",
+              progress: 100,
+              outputBlob: result.blob,
+              outputUrl,
+              outputSize: result.blob.size,
+              outputFileName: result.fileName,
+            };
+          }),
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : "Неизвестная ошибка";
         setFiles((prev) =>
           prev.map((entry) =>
-            entry.localId === fileEntry.localId ? { ...entry, status: "failed", progress: 100, error: message } : entry,
+            entry.localId === fileEntry.localId
+              ? { ...entry, status: "failed", progress: 100, error: message }
+              : entry,
           ),
         );
       }
     }
+
     setIsSubmitting(false);
   }
 
-  async function downloadJob(jobId: string): Promise<void> {
-    const response = await fetch(`/api/jobs/${jobId}/download`);
-    if (!response.ok) {
-      setGlobalError("Не удалось скачать файл.");
-      return;
-    }
-    const blob = await response.blob();
-    const contentDisposition = response.headers.get("content-disposition") ?? "";
-    const fileNameMatch = contentDisposition.match(/filename="(.+)"/);
-    const fileName = fileNameMatch?.[1] || "converted-image";
-    const url = URL.createObjectURL(blob);
+  function downloadEntry(entry: UploadedFile): void {
+    if (!entry.outputBlob || !entry.outputFileName) return;
+    const blobUrl = URL.createObjectURL(entry.outputBlob);
     const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
+    anchor.href = blobUrl;
+    anchor.download = entry.outputFileName;
     anchor.click();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(blobUrl);
   }
 
   async function downloadAllZip(): Promise<void> {
-    if (completedJobIds.length === 0) return;
-    const response = await fetch("/api/jobs/download-zip", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobIds: completedJobIds }),
-    });
-    if (!response.ok) {
-      setGlobalError("Не удалось скачать ZIP-архив.");
-      return;
+    if (completedEntries.length === 0) return;
+    const zip = new JSZip();
+
+    for (const entry of completedEntries) {
+      if (!entry.outputBlob || !entry.outputFileName) continue;
+      zip.file(entry.outputFileName, entry.outputBlob);
     }
 
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
+    const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+    const url = URL.createObjectURL(zipBlob);
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = "obrabotannye-izobrazheniya.zip";
@@ -282,14 +316,18 @@ export default function Home() {
   function removeFile(localId: string): void {
     setFiles((prev) => {
       const found = prev.find((item) => item.localId === localId);
-      if (found) URL.revokeObjectURL(found.previewUrl);
+      if (found) {
+        URL.revokeObjectURL(found.previewUrl);
+        if (found.outputUrl) URL.revokeObjectURL(found.outputUrl);
+      }
       return prev.filter((item) => item.localId !== localId);
     });
   }
 
   function clearFiles(): void {
-    for (const file of files) {
-      URL.revokeObjectURL(file.previewUrl);
+    for (const item of files) {
+      URL.revokeObjectURL(item.previewUrl);
+      if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
     }
     setFiles([]);
     setGlobalError("");
@@ -326,7 +364,7 @@ export default function Home() {
             </button>
           </div>
           <p className={isDark ? "mt-2 text-sm text-slate-300" : "mt-2 text-sm text-slate-600"}>
-            Выберите режим: отдельная вкладка для конвертации и отдельная для сжатия с сохранением формата.
+            Приложение работает полностью в браузере: без SSR и без серверной обработки файлов.
           </p>
           <div className="mt-4 flex gap-2">
             <button
@@ -398,16 +436,6 @@ export default function Home() {
                     Качество: {settings.quality}
                     <input type="range" min={1} max={100} value={settings.quality} onChange={(event) => updateSetting("quality", Number(event.target.value))} />
                   </label>
-                  <label className={isDark ? "grid gap-1 text-slate-300" : "grid gap-1 text-slate-700"}>
-                    Уровень PNG-сжатия: {settings.pngCompressionLevel}
-                    <input
-                      type="range"
-                      min={0}
-                      max={9}
-                      value={settings.pngCompressionLevel}
-                      onChange={(event) => updateSetting("pngCompressionLevel", Number(event.target.value))}
-                    />
-                  </label>
                   <div className="grid grid-cols-2 gap-2">
                     <label className={isDark ? "grid gap-1 text-slate-300" : "grid gap-1 text-slate-700"}>
                       Макс. ширина
@@ -452,7 +480,7 @@ export default function Home() {
                 void processAll();
               }}
             >
-              {isSubmitting ? "Добавление в очередь..." : hasRunFinished ? "Очистить список" : "Запуск"}
+              {isSubmitting ? "Обработка..." : hasRunFinished ? "Очистить список" : "Запуск"}
             </button>
             {canDownloadZip ? (
               <button
@@ -468,11 +496,7 @@ export default function Home() {
           {globalError ? <p className="mb-3 text-sm text-rose-600">{globalError}</p> : null}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {files.length === 0 ? (
-              <div
-                className={`anim-fade-up col-span-full rounded-2xl border p-8 text-center ${
-                  isDark ? "border-slate-800 bg-slate-900/70 text-slate-300" : "border-slate-200 bg-slate-50 text-slate-600"
-                }`}
-              >
+              <div className={`anim-fade-up col-span-full rounded-2xl border p-8 text-center ${isDark ? "border-slate-800 bg-slate-900/70 text-slate-300" : "border-slate-200 bg-slate-50 text-slate-600"}`}>
                 <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-dashed border-sky-400/60">
                   <svg viewBox="0 0 24 24" className="anim-soft-pulse h-7 w-7 text-sky-500" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
                     <path d="M12 16V4M7 9l5-5 5 5" />
@@ -512,15 +536,15 @@ export default function Home() {
                   {entry.error ? <p className="text-xs text-rose-600">{entry.error}</p> : null}
                 </div>
                 <div className="mt-2 flex gap-2">
-                    {entry.jobId && entry.status === "completed" ? (
+                  {entry.status === "completed" && entry.outputBlob ? (
                     <button
                       type="button"
                       className={isDark ? "cursor-pointer rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200 transition-all duration-200 hover:border-slate-500 hover:bg-slate-800" : "cursor-pointer rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-700 transition-all duration-200 hover:border-slate-500 hover:bg-slate-50"}
-                      onClick={() => void downloadJob(entry.jobId!)}
+                      onClick={() => downloadEntry(entry)}
                     >
                       Скачать
                     </button>
-                    ) : null}
+                  ) : null}
                 </div>
                 <div className={isDark ? "mt-3 h-2 w-full overflow-hidden rounded bg-slate-800" : "mt-3 h-2 w-full overflow-hidden rounded bg-slate-100"}>
                   <div

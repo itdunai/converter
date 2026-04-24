@@ -9,16 +9,16 @@ Web app for:
 ## Features
 
 - Multi-file upload (limit is configurable via env)
-- Adjustable quality, PNG compression, resize options
-- Queue-based async processing with per-file progress
+- Two modes: conversion and compression
+- Browser-side processing (no backend/API required)
+- Client-side processing with per-file progress (no backend required)
 - Single-file download and ZIP download for completed jobs
-- Health endpoint for deployment checks
 
 ## Tech stack
 
 - Next.js (App Router)
-- Sharp for image processing
-- In-memory queue for jobs
+- Browser APIs (Canvas + Blob)
+- JSZip for archive download
 
 ## Local run
 
@@ -33,30 +33,19 @@ Open `http://localhost:3000`.
 ## Scripts
 
 - `npm run dev` - development mode
-- `npm run build` - production build
-- `npm run start` - run production build
+- `npm run build` - static export build
+- `npm run start` - optional local preview via Node
 - `npm run lint` - ESLint
-- `npm run test` - Vitest tests
-
-## API endpoints
-
-- `POST /api/images/process` - enqueue one file for processing
-- `GET /api/jobs/:id` - get job status/progress
-- `GET /api/jobs/:id/download` - download processed file
-- `POST /api/jobs/download-zip` - download zip archive by `jobIds`
-- `GET /api/health` - healthcheck
 
 ## Deployment notes
 
-- Requires Node.js runtime (not static hosting).
-- `MAX_PARALLEL_JOBS` controls server-side processing concurrency.
-- `MAX_FILES_PER_BATCH` controls server-side batch validation limit.
+- Supports static hosting (`next export` via `output: "export"`).
 - `NEXT_PUBLIC_MAX_FILES_PER_BATCH` controls UI upload cap shown in browser.
-- For horizontal scaling, move queue state from memory to shared storage/queue.
+- No server-side queue or API routes are required.
 
 ## Beget deployment (example)
 
-1. Create a Node.js site in Beget panel and choose Node 20+.
+1. Create a static site in Beget panel.
 2. Upload project files (Git deploy or archive upload) to the app directory.
 3. In Beget shell, install dependencies and build:
 
@@ -65,22 +54,9 @@ npm ci
 npm run build
 ```
 
-4. Set start command in Beget app settings:
-
-```bash
-npm run start
-```
-
-5. Configure environment variables in Beget:
-   - `MAX_PARALLEL_JOBS=3`
-   - `MAX_FILES_PER_BATCH=20`
+4. Publish contents of the `out` directory as the site root.
+5. Configure environment variable before build if needed:
    - `NEXT_PUBLIC_MAX_FILES_PER_BATCH=20`
-   - `PORT` (if Beget requires a specific internal port)
-6. Ensure domain is linked to the Node.js app (reverse proxy to app process in Beget panel).
-7. Start/restart the app and check:
-   - main page: `https://your-domain`
-   - healthcheck: `https://your-domain/api/health`
-
-If static files or "Index of" appears, the domain is pointing to static hosting instead of the Node.js app process.
+6. Open the site domain and verify upload/processing in browser.
 
 Подробная инструкция на русском: `DEPLOY_BEGET.md`.
